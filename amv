@@ -1,7 +1,58 @@
 #!/usr/bin/env ruby
 
+require 'highline/import'
+require "fileutils"
+
+def yesno(prompt = 'Continue?', default = true)
+  a = ''
+  s = default ? '[Y/n]' : '[y/N]'
+  d = default ? 'y' : 'n'
+  until %w[y n].include? a
+    a = ask("#{prompt} #{s} ") { |q| q.limit = 1; q.case = :downcase }
+    a = d if a.length == 0
+  end
+  a == 'y'
+end
+
+puts <<-HERE
+----------------------------------------------------------------------------
+Audi MMI Video converter (AMV)
+Version 1.0.0 (C) Andy Jeffries, 2015, licensed under the GPL
+----------------------------------------------------------------------------
+
+This utility converts videos to a compatible format with Audi's MMI 3G+
+dashboard system (x264 at exactly 720x480 centre-cropped, with AAC 2.0 audi)
+
+HERE
+
+# 1. Check for utilities
+if `which ffprobe` == ""
+  puts "Unable to find 'ffprobe', please install ffmpeg and then re-try"
+  exit 1
+end
+if `which ffmpeg` == ""
+  puts "Unable to find 'ffmpeg', please install ffmpeg and then re-try"
+  exit 2
+end
+
+# 2. Check for existance of source and target files
 incoming_filename = ARGV[0]
-out_filename = incoming_filename.gsub(/\.[a-z0-9]*/, "_audi.avi")
+out_filename = incoming_filename.gsub(/\.[a-z0-9]*/, "_audi.mp4")
+unless File.exist?(incoming_filename)
+  puts "Source file #{incoming_filename} doesn't exist, please check the file name and re-try"
+  exit 3
+end
+if File.exist?(out_filename)
+  if yesno("#{out_filename} already exists, do you wish to remove it?", true)
+    FileUtils.rm_f(out_filename)
+  end
+  if File.exist?(out_filename)
+    puts "Cannot continue while target file #{out_filename} exists, please remove it and re-try"
+    exit 4
+  end
+end
+
+
 
 temp = `ffprobe -v error -of flat=s=_ -select_streams v:0 -show_entries stream=height,width "#{incoming_filename}"`
 incoming_width = temp[/streams_stream_0_width=(\d+)/, 1].to_f # 600
@@ -36,8 +87,9 @@ else
   end
 end
 
-puts %Q{ffmpeg -i "#{incoming_filename}" -r 30 -vf "scale=#{scale}, crop=#{crop}"  -c:v libxvid -qscale:v 10 -ab 128k "#{out_filename}"}
-`ffmpeg -i "#{incoming_filename}" -r 30 -vf "scale=#{scale}, crop=#{crop}" -c:v libxvid -qscale:v 10 -ab 128k "#{out_filename}"`
+command = %Q{ffmpeg -i "#{incoming_filename}" -r 30 -vf "scale=#{scale}, crop=#{crop}" -c:v libx264 -b:v 4000k -minrate 4000k -maxrate 4000k -bufsize 1835k -c:a libvo_aacenc -b:a 128k -ac 2 "#{out_filename}"}
+puts command
+`#{command}`
 
 puts
 temp = `ffprobe -v error -of flat=s=_ -select_streams v:0 -show_entries stream=height,width "#{out_filename}"`
