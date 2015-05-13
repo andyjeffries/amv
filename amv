@@ -1,0 +1,54 @@
+#!/usr/bin/env ruby
+
+incoming_filename = ARGV[0]
+out_filename = incoming_filename.gsub(/\.[a-z0-9]*/, "_audi.avi")
+
+temp = `ffprobe -v error -of flat=s=_ -select_streams v:0 -show_entries stream=height,width "#{incoming_filename}"`
+incoming_width = temp[/streams_stream_0_width=(\d+)/, 1].to_f # 600
+incoming_height = temp[/streams_stream_0_height=(\d+)/, 1].to_f # 480 # 1.25
+out_width = 720.0
+out_height = 480.0 # 1.5
+
+width_diff = out_width - incoming_width # 120
+height_diff = out_height - incoming_height # 0
+
+if incoming_width < out_width || incoming_height < out_height
+  puts "- Smaller in one dimension than required"
+  if width_diff < height_diff
+    puts "- Width diff from ideal is less than height diff from ideal"
+    scale = "-2:#{out_height}"
+    crop="#{out_width}:in_h"
+  else
+    puts "- Height diff from ideal is less than width diff from ideal"
+    calculated_height = incoming_height * (out_width/out_height)
+    scale = "-2:#{calculated_height}"
+    crop="#{out_width}:#{out_height}"
+  end
+  # puts %Q{ffmpeg -i "#{incoming_filename}" -vf "crop=#{crop}, scale=#{scale}"  -c:v libxvid -qscale:v 10 "#{out_filename}"}
+  # `ffmpeg -i "#{incoming_filename}" -vf "crop=#{crop}, scale=#{scale}" -c:v libxvid -qscale:v 10 "#{out_filename}"`
+else
+  if width_diff < height_diff
+    scale = "-2:#{out_height}"
+    crop="#{out_width}:in_h"
+  else
+    scale = "#{out_width}:-2"
+    crop="#{out_width}:#{out_height}"
+  end
+end
+
+puts %Q{ffmpeg -i "#{incoming_filename}" -r 30 -vf "scale=#{scale}, crop=#{crop}"  -c:v libxvid -qscale:v 10 -ab 128k "#{out_filename}"}
+`ffmpeg -i "#{incoming_filename}" -r 30 -vf "scale=#{scale}, crop=#{crop}" -c:v libxvid -qscale:v 10 -ab 128k "#{out_filename}"`
+
+puts
+temp = `ffprobe -v error -of flat=s=_ -select_streams v:0 -show_entries stream=height,width "#{out_filename}"`
+final_width = temp[/streams_stream_0_width=(\d+)/, 1].to_i
+final_height = temp[/streams_stream_0_height=(\d+)/, 1].to_i
+if "#{final_width}x#{final_height}" != "#{out_width.to_i}x#{out_height.to_i}"
+  puts "!" * 80
+  puts "! Failed to correctly output a #{out_width.to_i}x#{out_height.to_i} video, actual file was #{final_width}x#{final_height}"
+  puts "!" * 80
+else
+  puts "☺ " * 40
+  puts "☺ A #{out_width.to_i}x#{out_height.to_i} video has been created, called #{out_filename}"
+  puts "☺ " * 40
+end
