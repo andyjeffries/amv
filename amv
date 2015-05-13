@@ -2,6 +2,8 @@
 
 require 'highline/import'
 require "fileutils"
+require "open3"
+require_relative "lib/progressbar"
 
 def yesno(prompt = 'Continue?', default = true)
   a = ''
@@ -13,6 +15,48 @@ def yesno(prompt = 'Continue?', default = true)
   end
   a == 'y'
 end
+
+def fix_encoding(output)
+  output[/test/] # Running a regexp on the string throws error if it's not UTF-8
+rescue ArgumentError
+  output.force_encoding("ISO-8859-1")
+end
+
+# frame= 4855 fps= 46 q=31.0 size=   45306kB time=00:02:42.28 bitrate=2287.0kbits/
+def transcode_movie(command)
+  @output = ""
+
+  Open3.popen3(command) do |stdin, stdout, stderr, wait_thr|
+    begin
+      yield(0.0) if block_given?
+      next_line = Proc.new do |line|
+        fix_encoding(line)
+        @output << line
+
+        if line[/Duration: (\d{2}):(\d{2}):(\d{2}\.\d{2})/]
+          @duration = ($1.to_i*60*60) + ($2.to_i*60) + $3.to_f
+          # puts "FOUND DURATION #{line} = #{duration}"
+        elsif line.include?("time=")
+          # puts "."
+          # puts "FOUND TIME #{line}"
+          if line =~ /time=(\d+):(\d+):(\d+.\d+)/ # ffmpeg 0.8 and above style
+            time = ($1.to_i * 3600) + ($2.to_i * 60) + $3.to_f
+            # puts "line #{line}, time is #{time}, duration is #{@duration}"
+          else # better make sure it wont blow up in case of unexpected output
+            time = 0.0
+          end
+          progress = (time / @duration) * 100
+          # puts "/"
+          yield(progress) if block_given?
+          # puts "*"
+        end
+      end
+
+      stderr.each_line('size=', &next_line)
+    end
+  end
+end
+
 
 puts <<-HERE
 ----------------------------------------------------------------------------
@@ -88,19 +132,20 @@ else
 end
 
 command = %Q{ffmpeg -i "#{incoming_filename}" -r 30 -vf "scale=#{scale}, crop=#{crop}" -c:v libx264 -b:v 4000k -minrate 4000k -maxrate 4000k -bufsize 1835k -c:a libvo_aacenc -b:a 128k -ac 2 "#{out_filename}"}
-puts command
-`#{command}`
+@pbar = ProgressBar.new("Transcoding", 100)
+transcode_movie(command) do |progress|
+  progress = 100 if progress > 100
+  @pbar.set(progress)
+end
+@pbar.finish
 
 puts
 temp = `ffprobe -v error -of flat=s=_ -select_streams v:0 -show_entries stream=height,width "#{out_filename}"`
 final_width = temp[/streams_stream_0_width=(\d+)/, 1].to_i
 final_height = temp[/streams_stream_0_height=(\d+)/, 1].to_i
 if "#{final_width}x#{final_height}" != "#{out_width.to_i}x#{out_height.to_i}"
-  puts "!" * 80
-  puts "! Failed to correctly output a #{out_width.to_i}x#{out_height.to_i} video, actual file was #{final_width}x#{final_height}"
-  puts "!" * 80
+  puts "\033[31m✗ Failed to correctly output a #{out_width.to_i}x#{out_height.to_i} video, actual file was #{final_width}x#{final_height}"
 else
-  puts "☺ " * 40
-  puts "☺ A #{out_width.to_i}x#{out_height.to_i} video has been created, called #{out_filename}"
-  puts "☺ " * 40
+  puts "\033[32m✓ #{out_width.to_i}x#{out_height.to_i} video has been created, called #{out_filename}"
 end
+puts "\033[0m"
